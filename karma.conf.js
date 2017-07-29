@@ -15,10 +15,13 @@ module.exports = function(config) {
 
         // list of files / patterns to load in the browser
         files: [
+            // 'test/mock-ajax.js',
+            // 'test/esl.js',
+            'test/*.js',
             'src/**',
-            'test/**/*Spec.js'
+            'test/**/*Spec.js',
+            {pattern: 'test/combo/*.js', watched: true, included: false, served: true, nocache: false}
         ],
-
 
         // list of files to exclude
         exclude: [],

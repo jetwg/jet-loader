@@ -1,3 +1,4 @@
+/* eslint-disable */
 /**
  * ESL (Enterprise Standard Loader)
  * Copyright 2013 Baidu Inc. All rights reserved.
@@ -832,6 +833,9 @@ var esl;
                 var loaderValue;
                 var context = {
                     id: id,
+                    loadModule: loadModule,
+                    modModules: modModules,
+                    loadingModules: loadingModules,
                     load: function (src) {
                         if (!(loadingModules[id] || modModules[id])) {
                             loadModule(id, src);

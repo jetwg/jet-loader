@@ -1,0 +1,22 @@
+{
+    "eslint": {
+        "env": {
+            "node": true,
+            "browser": true
+        },
+
+        "globals": {
+            "console": true,
+            "require": true,
+            "define": true,
+            "BNJS": true,
+            "replaceUrl": true,
+            "hideHeader": true,
+            "akb": true
+        },
+
+        "rules": {
+
+        }
+    }
+}

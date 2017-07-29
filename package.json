@@ -3,7 +3,10 @@
   "version": "1.0.0",
   "description": "jet loader",
   "main": "dist/jet-loader.js",
-  "scripts": {},
+  "scripts": {
+    "build": "sh build.sh",
+    "test": "karma start karma.conf.js"
+  },
   "keywords": [
     "jet",
     "loader"
@@ -11,11 +14,13 @@
   "author": "kaivean@outlook.com",
   "license": "ISC",
   "dependencies": {
-    "fis3": "^3.4.33"
+
   },
   "devDependencies": {
+    "jasmine": "^2.7.0",
     "karma": "^1.7.0",
     "karma-chrome-launcher": "^2.2.0",
-    "karma-jasmine": "^1.1.0"
+    "karma-jasmine": "^1.1.0",
+    "fis3": "^3.4.33"
   }
 }
