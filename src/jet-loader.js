@@ -32,9 +32,8 @@
     var loop = function () {};
 
     /**
-     * 简单对象合并函数
+     * 简单对象合并函数，返回新对象，不会修改参数对象
      *
-     * @inner
      * @return {Object} newObj
      */
     function extend() {
@@ -93,10 +92,90 @@
                 }, 10);
             }
             else {
-                next(false); // next 表示终止本次链式处理
+                next(false); // next 表示正常终止本次链式处理
             }
-            this.tmpCacheIds.push(param.id);
+            ctx.tmpCacheIds.push(param);
         };
+    }
+
+    /**
+     * Ajax请求简单封装
+     *
+     * @param {Object} ctx loader的实例对象
+     * @param {Object} opt 参数
+     * @param {string} opt.url 请求url
+     * @param {Function} opt.success 请求成功回调
+     * @param {Function} opt.error 请求失败回调
+     * @return {undefined} 提前终止而已
+     */
+    function ajax(ctx, opt) {
+        var xhr = ctx.xhr = new XMLHttpRequest();
+        xhr.onload = function () {
+            xhr.onload = null;
+            if (xhr.status === 200) {
+                try {
+                    var response = JSON.parse(xhr.responseText);
+                }
+                catch (e) {
+                    opt.error('parse');
+                    return;
+                }
+                opt.success(response);
+            }
+            else {
+                // 响应返回的xhr.statusCode是4xx时，
+                // 并不属于Network error，所以不会
+                // 触发onerror事件，而是会触发onload事件。
+                opt.error(false);
+            }
+        };
+        // 由请求开始即onloadstart开始算起，
+        // 当到达xhr.timeout所设置时间请求
+        // 还未结束即onloadend，则触发此事件
+        xhr.ontimeout = function () {
+            opt.error('timeout');
+        };
+        // 只有发生了网络层级别的异常才会触发此事件
+        xhr.onerror = function () {
+            opt.error('error');
+        };
+        // 调用xhr.abort()后触发
+        xhr.onabort = function () {
+            opt.error('abort');
+        };
+        xhr.timeout = 10000;
+        xhr.open('get', opt.url, true);
+        xhr.send();
+    }
+
+    /**
+     * 动态加载缺失模块依赖
+     *
+     * @param {Object} ctx loader的实例对象
+     * @param {Array} lackIds 缺失的模块
+     * @param {Function} callback 回调
+     * @return {undefined} 提前终止而已
+     */
+    function loadLackedIdMap(ctx, lackIds, callback) {
+        if (!lackIds.length) {
+            return callback(true);
+        }
+        var url = ctx.opt.depUrl + encodeURIComponent(lackIds.join(','));
+        ajax(ctx, {
+            url: url,
+            success: function (res) {
+                if (res.status) {
+                    return callback(false);
+                }
+
+                ctx.map = extend(ctx.map, res.data);
+                // 自己使用，不用判断callback是否存在
+                callback(true);
+            },
+            error: function () {
+                callback(false);
+            }
+        });
     }
 
     /**
@@ -107,83 +186,46 @@
      */
     function getDepMap(ctx) {
 
-        function ajax(opt) {
-            var xhr = ctx.xhr = new XMLHttpRequest();
-            xhr.onload = function () {
-                xhr.onload = null;
-                if (xhr.status === 200) {
-                    try {
-                        var response = JSON.parse(xhr.responseText);
-                    }
-                    catch (e) {
-                        opt.error('parse');
-                        return;
-                    }
-                    opt.success(response);
-                }
-                else {
-                    // 响应返回的xhr.statusCode是4xx时，
-                    // 并不属于Network error，所以不会
-                    // 触发onerror事件，而是会触发onload事件。
-                    opt.error(false);
-                }
-            };
-            // 由请求开始即onloadstart开始算起，
-            // 当到达xhr.timeout所设置时间请求
-            // 还未结束即onloadend，则触发此事件
-            xhr.ontimeout = function () {
-                opt.error('timeout');
-            };
-            // 只有发生了网络层级别的异常才会触发此事件
-            xhr.onerror = function () {
-                opt.error('error');
-            };
-            // 调用xhr.abort()后触发
-            xhr.onabort = function () {
-                opt.error('abort');
-            };
-            xhr.timeout = 10000;
-            xhr.open('get', opt.url, true);
-            xhr.send();
-        }
-
-        function loadLackedIdMap(lackIds, callback) {
-            if (!lackIds.length) {
-                return callback(true);
-            }
-            var url = ctx.opt.depUrl + encodeURIComponent(lackIds.join(','));
-            ajax({
-                url: url,
-                success: function (res) {
-                    if (res.status) {
-                        return callback(false);
-                    }
-
-                    ctx.map = extend(ctx.map, res.data);
-                    // 自己使用，不用判断callback是否存在
-                    callback(true);
-                },
-                error: function () {
-                    callback(false);
-                }
-            });
-        }
-
         return function (param, next) {
-            var len = this.ids.length;
+            var len = ctx.ids.length;
             var lackIds = [];
 
             for (var i = 0; i < len; i++) { // 继续深入分析依赖v
-                var id = this.ids[i];
-                if (!this.map[id]) {
+                var id = ctx.ids[i];
+                if (!ctx.map[id]) {
                     lackIds.push(id);
                 }
             }
 
-            loadLackedIdMap(lackIds, function (res) {
+            loadLackedIdMap(ctx, lackIds, function (res) {
                 next(res);
             });
         };
+    }
+
+    /**
+     * 递归分析依赖
+     *
+     * @param {string} id 模块id
+     * @param {Object} map 依赖映射关系
+     * @return {Function} 中间件
+     */
+    function analyze(id, map) {
+        var dep = [];
+        var info = map[id];
+        var deps = info.d || []; // d代表直接依赖，用简写减少输出到html代码量
+        var len = deps.length;
+
+        for (var i = 0; i < len; i++) { // 继续深入分析依赖
+            var nextid = deps[i];
+            if (map[nextid]) { // 从map里找到模块依赖
+                var d = analyze(deps[i], map);
+                dep.push.apply(dep, d);
+            }
+        }
+
+        dep.push(id);
+        return dep;
     }
 
     /**
@@ -195,44 +237,24 @@
     function analyzeDep(ctx) {
         ctx.deps = [];
 
-        function analyze(id, map) {
-            var dep = [];
-            var info = map[id];
-            var deps = info.d || []; // d代表直接依赖，用简写减少输出到html代码量
-            var len = deps.length;
-
-            for (var i = 0; i < len; i++) { // 继续深入分析依赖
-                var nextid = deps[i];
-                if (map[nextid]) { // 从map里找到模块依赖
-                    var d = analyze(deps[i], map);
-                    dep.push.apply(dep, d);
-                }
-            }
-
-            dep.push(id);
-            return dep;
-        }
-
         return function (param, next) {
             var dep = [];
-            var map = this.map;
-            var len = this.ids.length;
+            var map = ctx.map;
+            var len = ctx.ids.length;
             for (var i = 0; i < len; i++) { // 继续深入分析依赖
-                var id = this.ids[i];
+                var id = ctx.ids[i];
                 if (map[id]) { // 从map里找到模块依赖
                     var d = analyze(id, map);
                     dep.push.apply(dep, d);
                 }
             }
-            this.deps = dep;
+            ctx.deps = dep;
             next();
         };
     }
 
-
-
     /**
-     * 中间件包裹-加载所有依赖模块
+     * 中间件包裹-以combo服务加载所有依赖模块
      *
      * @param {Object} ctx 实例上下文
      * @return {Function} 中间件
@@ -241,10 +263,12 @@
         // 必须调用esl的 loadModule 加载模块， 否则esl无法保证得知id的加载状态，会导致超时
         function loadUrl(path, ids) {
             var url = ctx.opt.comboUrl + path;
-            for (var i = 0; i < ids.length; i++) {
+            var elsContext = ctx.eslContext;
+            var len = ids.length;
+            for (var i = 0; i < len; i++) {
                 var id = ids[i];
-                if (!(ctx.eslContext.loadingModules[id] || ctx.eslContext.modModules[id])) {
-                    ctx.eslContext.loadModule(id, url);
+                if (!(elsContext.loadingModules[id] || elsContext.modModules[id])) {
+                    elsContext.loadModule(id, url);
                 }
             }
         }
@@ -261,10 +285,10 @@
                 var gap = param ? comma : '';
                 var nextparam = param + gap + id;
                 if (nextparam.length > paramLimit) {
-                    loadUrl(param, curIds);
-                    param = '';
+                    loadUrl(param, curIds); // 加载当前url
+                    param = ''; // 清空query
                     param += id;
-                    curIds = [];
+                    curIds = []; // 清空已经开始加载的id
                     curIds.push(id);
                 }
                 else {
@@ -351,12 +375,10 @@
         if (ret) {
             next();
         }
-        // 如果没有处理，那么就是false，就是该模块由我们加载，esl不需要管了，必须返回false才行，undefine不行
-        if (typeof ret === 'undefined') {
-            ret = false;
-        }
+        ret && next();
 
-        return ret;
+        // 如果没有处理，那么就是false，就是该模块由我们加载，esl不需要管了，必须返回false才行，undefine不行
+        return typeof ret === 'undefined' ? false : ret;
     }
 
     /**
@@ -422,12 +444,13 @@
      * @return {Mixed} 返回值
      */
     JetLoader.prototype.requireLoad = function (context, callback) {
-        var param = [{
-            id: context.id,
-            context: context
+        // 以数组传递，方便后续可以应用apply函数
+        var args = [{
+            id: context.id // 当前只有一个id，后续可能会增加参数，那么每个中间件都有参数param = {id: };
         }];
+        // 保存起来，后续会用到来调用esl的loadModule来加载模块
         this.eslContext = context;
-        var ret = chains.call(this, this.middlewares, 0, param, function (ret) {
+        var ret = chains.call(this, this.middlewares, 0, args, function (ret) {
             callback(); // 告诉esl完成加载
         });
         return ret;
