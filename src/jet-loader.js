@@ -1,6 +1,7 @@
 /**
  * @file jet loader 依赖于定制的 esl版本：给外部提供loader机制
- *       设计： 采用类中间件设计，目的是使得loader的依赖分析，优化、Combo加载等过程更近清楚有序，同时每个过程的异步操作也只是中间件内部控制即可，整个流程变得有序，也方便功能拓展和策略优化
+ *       设计： 采用类中间件设计，目的是使得loader的依赖分析，优化、Combo加载等过程更近清楚有序，
+ *             同时每个过程的异步操作也只是中间件内部控制即可，整个流程变得有序，也方便功能拓展和策略优化
  *       当前项目代码不多，就仿照大神一个文件到底了，后续将中间件拆成文件管理
  * @author kaivean(kaivean@outlook.com)
  */
@@ -23,7 +24,9 @@
     var defaultOpt = {
         comboUrl: '/combo??', // combo url
         depUrl: '/dep?id=', // 动态获取依赖配置的url
-        map: {} // 当前依赖配置
+        map: {}, // 当前依赖配置
+        combo: true,
+        loadDep: true
     };
 
     // 市面上对url的限制不一，也跟服务器设置相关，目前ie底版本限制2048，综合给出一个大概数字，后续根据线上稳定性日志调整
@@ -94,7 +97,7 @@
             else {
                 next(false); // next 表示正常终止本次链式处理
             }
-            ctx.tmpCacheIds.push(param);
+            ctx.tmpCacheIds.push(param.id);
         };
     }
 
@@ -247,6 +250,9 @@
                     var d = analyze(id, map);
                     dep.push.apply(dep, d);
                 }
+                else {
+                    dep.push(id); // 没有依赖关系还是要去尝试加载的
+                }
             }
             ctx.deps = dep;
             next();
@@ -260,15 +266,18 @@
      * @return {Function} 中间件
      */
     function combo(ctx) {
+        // 怕不同id，指向同一个文件，所以做了层unique，相同path只combo加载一次
+        var pathCache = {};
+
         // 必须调用esl的 loadModule 加载模块， 否则esl无法保证得知id的加载状态，会导致超时
         function loadUrl(path, ids) {
             var url = ctx.opt.comboUrl + path;
-            var elsContext = ctx.eslContext;
+            var eslContext = ctx.eslContext;
             var len = ids.length;
             for (var i = 0; i < len; i++) {
                 var id = ids[i];
-                if (!(elsContext.loadingModules[id] || elsContext.modModules[id])) {
-                    elsContext.loadModule(id, url);
+                if (!(eslContext.loadingModules[id] || eslContext.modModules[id])) {
+                    eslContext.loadModule(id, url);
                 }
             }
         }
@@ -276,14 +285,25 @@
         // 优化：当要combo加载的模块过多，那么url可能长，过长容易导致url加载失败，因此做截断处理，分段加载
         function load(ids) {
             var len = ids.length;
+            var map = ctx.map;
             var param = '';
             var paramLimit = limitUrlLen - ctx.opt.comboUrl.length; // 去除
             var curIds = [];
             var comma = ','; // encodeURIComponent(',');
+
             for (var i = 0; i < len; i++) {
                 var id = ids[i]; // encodeURIComponent(ids[i]);
                 var gap = param ? comma : '';
-                var nextparam = param + gap + id;
+                var idInfo = map[id] || {};
+                var path = idInfo.p || (id + '.js');
+                var nextparam = param;
+                // 怕不同id，指向同一个文件，所以做了层unique，相同path只combo加载一次
+                if (pathCache[path]) {
+                    curIds.push(id);
+                    continue;
+                }
+                nextparam = param + gap + path;
+                pathCache[path] = 1;
                 if (nextparam.length > paramLimit) {
                     loadUrl(param, curIds); // 加载当前url
                     param = ''; // 清空query
@@ -296,6 +316,7 @@
                     param = nextparam;
                 }
 
+                // 最后了，必须要加载了
                 if (i === len - 1) {
                     loadUrl(param, curIds);
                 }
@@ -304,9 +325,8 @@
 
         function loadDep(callback) {
             var deps = ctx.deps;
-            var map = ctx.map;
             var len = deps.length;
-            var paths = [];
+            var ids = [];
             for (var i = 0; i < len; i++) {
                 var id = deps[i];
 
@@ -314,13 +334,23 @@
                 if (ctx.cache[id] || ctx.eslContext.getModuleState(id) !== require.ModuleState.NOT_FOUND) {
                     continue;
                 }
-                var info = map[id];
-                var path = info.p || id;
                 ctx.cache[id] = 1; // loading;
-                paths.push(path);
+
+                // 不要combo，就一个一个加载
+                if (!ctx.opt.combo) {
+                    load([id]);
+                }
+                else {
+                    ids.push(id);
+                }
             }
-            paths = unique(paths);
-            load(paths); // 加载模块，处理url过长情况，同时交给esl的去加载
+
+            // 需要combo的话
+            if (ctx.opt.combo) {
+                ids = unique(ids);
+                load(ids); // 加载模块，处理url过长情况，同时交给esl的去加载
+            }
+
             callback();
         }
 
@@ -412,7 +442,9 @@
         this.registerLoader();
 
         this.use(collectModIds(this));
-        this.use(getDepMap(this));
+        if (this.opt.loadDep) {
+            this.use(getDepMap(this));
+        }
         this.use(analyzeDep(this));
         this.use(combo(this));
     };
