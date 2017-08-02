@@ -18,15 +18,14 @@
     /**
      * 默认配置
      *
-     * @inner
      * @type {Object}
      */
     var defaultOpt = {
         comboUrl: '/combo??', // combo url
         depUrl: '/dep?id=', // 动态获取依赖配置的url
         map: {}, // 当前依赖配置
-        combo: true,
-        loadDep: true
+        combo: true, // 开启combo服务，默认true
+        loadDep: true // 没有依赖，就动态去加载依赖，默认true
     };
 
     // 市面上对url的限制不一，也跟服务器设置相关，目前ie底版本限制2048，综合给出一个大概数字，后续根据线上稳定性日志调整
@@ -84,7 +83,7 @@
         ctx.tmpCacheIds = [];
 
         return function (param, next) {
-            // 缓冲区里没有模块id，那么就等待10ms后去加载模块id，同时10ms以内新增的id也一并一起执行
+            // 缓冲区里没有模块id，那么就等待2ms后去加载模块id，同时2ms以内新增的id也一并一起执行
             if (!ctx.tmpCacheIds.length) {
                 setTimeout(function () {
                     if (ctx.tmpCacheIds.length) {
@@ -92,7 +91,7 @@
                         ctx.tmpCacheIds = [];  // 清空缓冲区，继续下一个tick的加载
                         next(); // 开始处理当前需要的模块
                     }
-                }, 10);
+                }, 2);
             }
             else {
                 next(false); // next 表示正常终止本次链式处理
@@ -259,71 +258,84 @@
         };
     }
 
+    // 怕不同id，指向同一个文件，所以做了层unique，相同path只combo加载一次
+    var pathCache = {};
+
+    /**
+     * 必须调用esl的 loadModule 加载模块， 否则esl无法保证得知id的加载状态，会导致超时
+     *
+     * @param {Object} ctx loader实例
+     * @param {string} search url的search
+     * @param {Array} ids 所有模块
+     */
+    function loadUrl(ctx, search, ids) {
+        var url = ctx.opt.comboUrl + search;
+        var eslContext = ctx.eslContext;
+        var len = ids.length;
+        for (var i = 0; i < len; i++) {
+            var id = ids[i];
+            if (!(eslContext.loadingModules[id] || eslContext.modModules[id])) {
+                eslContext.loadModule(id, url);
+            }
+        }
+    }
+
+    /**
+     * 加载所有模块，优化：当要combo加载的模块过多，那么url可能长，过长容易导致url加载失败，因此做截断处理，分段加载
+     *
+     * @param {Object} ctx loader实例
+     * @param {Array} ids 所有模块
+     */
+    function load(ctx, ids) {
+        var len = ids.length;
+        var map = ctx.map;
+        var search = ''; // url的search部分
+        var searchLimit = limitUrlLen - ctx.opt.comboUrl.length; // 去除
+        var curIds = [];
+        var comma = ','; // encodeURIComponent(',');
+
+        for (var i = 0; i < len; i++) {
+            var id = ids[i]; // encodeURIComponent(ids[i]);
+            var gap = search ? comma : '';
+            var idInfo = map[id] || {};
+            var path = idInfo.p || (id + '.js');
+            var nextsearch = search;
+            // 怕不同id，指向同一个文件，所以做了层unique，相同path只combo加载一次
+            if (pathCache[path]) {
+                curIds.push(id);
+                continue;
+            }
+            nextsearch = search + gap + path;
+            pathCache[path] = 1;
+            if (nextsearch.length > searchLimit) {
+                loadUrl(ctx, search, curIds); // 加载当前url
+                search = ''; // 清空query
+                search += id;
+                curIds = []; // 清空已经开始加载的id
+                curIds.push(id);
+            }
+            else {
+                curIds.push(id);
+                search = nextsearch;
+            }
+
+            // 最后了，必须要加载了
+            if (i === len - 1) {
+                loadUrl(ctx, search, curIds);
+            }
+        }
+    }
+
     /**
      * 中间件包裹-以combo服务加载所有依赖模块
+     * 说明： 中间件返回一个函数，而不是直接函数，目的是use中间件时，可以做一些初始化工作，以下没有这些工作
      *
      * @param {Object} ctx 实例上下文
      * @return {Function} 中间件
      */
     function combo(ctx) {
-        // 怕不同id，指向同一个文件，所以做了层unique，相同path只combo加载一次
-        var pathCache = {};
 
-        // 必须调用esl的 loadModule 加载模块， 否则esl无法保证得知id的加载状态，会导致超时
-        function loadUrl(path, ids) {
-            var url = ctx.opt.comboUrl + path;
-            var eslContext = ctx.eslContext;
-            var len = ids.length;
-            for (var i = 0; i < len; i++) {
-                var id = ids[i];
-                if (!(eslContext.loadingModules[id] || eslContext.modModules[id])) {
-                    eslContext.loadModule(id, url);
-                }
-            }
-        }
-
-        // 优化：当要combo加载的模块过多，那么url可能长，过长容易导致url加载失败，因此做截断处理，分段加载
-        function load(ids) {
-            var len = ids.length;
-            var map = ctx.map;
-            var param = '';
-            var paramLimit = limitUrlLen - ctx.opt.comboUrl.length; // 去除
-            var curIds = [];
-            var comma = ','; // encodeURIComponent(',');
-
-            for (var i = 0; i < len; i++) {
-                var id = ids[i]; // encodeURIComponent(ids[i]);
-                var gap = param ? comma : '';
-                var idInfo = map[id] || {};
-                var path = idInfo.p || (id + '.js');
-                var nextparam = param;
-                // 怕不同id，指向同一个文件，所以做了层unique，相同path只combo加载一次
-                if (pathCache[path]) {
-                    curIds.push(id);
-                    continue;
-                }
-                nextparam = param + gap + path;
-                pathCache[path] = 1;
-                if (nextparam.length > paramLimit) {
-                    loadUrl(param, curIds); // 加载当前url
-                    param = ''; // 清空query
-                    param += id;
-                    curIds = []; // 清空已经开始加载的id
-                    curIds.push(id);
-                }
-                else {
-                    curIds.push(id);
-                    param = nextparam;
-                }
-
-                // 最后了，必须要加载了
-                if (i === len - 1) {
-                    loadUrl(param, curIds);
-                }
-            }
-        }
-
-        function loadDep(callback) {
+        return function (param, next) {
             var deps = ctx.deps;
             var len = deps.length;
             var ids = [];
@@ -338,7 +350,7 @@
 
                 // 不要combo，就一个一个加载
                 if (!ctx.opt.combo) {
-                    load([id]);
+                    load(ctx, [id]);
                 }
                 else {
                     ids.push(id);
@@ -348,16 +360,10 @@
             // 需要combo的话
             if (ctx.opt.combo) {
                 ids = unique(ids);
-                load(ids); // 加载模块，处理url过长情况，同时交给esl的去加载
+                load(ctx, ids); // 加载模块，处理url过长情况，同时交给esl的去加载
             }
 
-            callback();
-        }
-
-        return function (param, next) {
-            loadDep(function () {
-                next();
-            });
+            next();
         };
     }
 
