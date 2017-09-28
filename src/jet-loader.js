@@ -21,11 +21,14 @@
      * @type {Object}
      */
     var defaultOpt = {
-        comboUrl: '/combo??', // combo url
-        depUrl: '/dep?id=', // 动态获取依赖配置的url
+        comboHost: '//jet.bdstatic.com', // combo url, cdn
+        comboPath: '/bypath??', // combo url, cdn
+        byidPath: '/byid??', // combo url, cdn
+        depUrl: '//jet.baidu.com/dep?ids=', // 动态获取依赖配置的url
         map: {}, // 当前依赖配置
         combo: true, // 开启combo服务，默认true
-        loadDep: true // 没有依赖，就动态去加载依赖，默认true
+        loadDep: true, // 没有依赖，就动态去加载依赖，默认true
+        debug: false // debug为true，走esl流程，方便本地开发测试
     };
 
     // 市面上对url的限制不一，也跟服务器设置相关，目前ie底版本限制2048，综合给出一个大概数字，后续根据线上稳定性日志调整
@@ -55,7 +58,7 @@
     }
 
     /**
-     * 简单数组去重函数
+     * 简单去重函数，去重模块，已模块id为唯一
      *
      * @param {Array} arr 待去重数组
      * @return {Array} 新数组
@@ -65,39 +68,20 @@
         var map = {};
         var len = arr.length;
         for (var i = 0; i < len; i++) {
-            if (!map[arr[i]]) {
+            if (!map[arr[i].id]) {
                 res.push(arr[i]);
-                map[arr[i]] = 1;
+                map[arr[i].id] = 1;
             }
         }
         return res;
     }
 
-    /**
-     * 中间件包裹-实现加载优化，某个时间段 require的所有模块一次性加载
-     *
-     * @param {Object} ctx 实例上下文
-     * @return {Function} 中间件
-     */
-    function collectModIds(ctx) {
-        ctx.tmpCacheIds = [];
-
-        return function (param, next) {
-            // 缓冲区里没有模块id，那么就等待2ms后去加载模块id，同时2ms以内新增的id也一并一起执行
-            if (!ctx.tmpCacheIds.length) {
-                setTimeout(function () {
-                    if (ctx.tmpCacheIds.length) {
-                        ctx.ids = ctx.tmpCacheIds; // 将缓冲区所有模块压入主变量，开始加载这些模块模块
-                        ctx.tmpCacheIds = [];  // 清空缓冲区，继续下一个tick的加载
-                        next(); // 开始处理当前需要的模块
-                    }
-                }, 2);
+    function each(obj, cb) {
+        for (var key in obj) {
+            if (obj.hasOwnProperty(key)) {
+                cb(obj[key], key);
             }
-            else {
-                next(false); // next 表示正常终止本次链式处理
-            }
-            ctx.tmpCacheIds.push(param.id);
-        };
+        }
     }
 
     /**
@@ -159,18 +143,26 @@
      * @return {undefined} 提前终止而已
      */
     function loadLackedIdMap(ctx, lackIds, callback) {
-        if (!lackIds.length) {
+        // disableLoadDeps是在分析时标记的当前缺失某些模块信息，需要走兜底机制，不用再请求了
+        if (!lackIds.length || ctx.instance.disableLoadDeps) {
             return callback(true);
         }
-        var url = ctx.opt.depUrl + encodeURIComponent(lackIds.join(','));
+        var instance = ctx.instance;
+        var url = instance.opt.depUrl + encodeURIComponent(lackIds.join(','));
         ajax(ctx, {
             url: url,
             success: function (res) {
                 if (res.status) {
                     return callback(false);
                 }
-
-                ctx.map = extend(ctx.map, res.data);
+                each(res.data, function (packInfo, packName) {
+                    var curPackInfo = instance.map[packName];
+                    if (!curPackInfo) {
+                        curPackInfo = {map: {}};
+                    }
+                    curPackInfo.map = extend(curPackInfo.map, packInfo.map || {});
+                    instance.map[packName] = curPackInfo;
+                });
                 // 自己使用，不用判断callback是否存在
                 callback(true);
             },
@@ -183,83 +175,239 @@
     /**
      * 中间件包裹-获取到本次加载模块的所有依赖是否已经ready，没有ready就去下载
      *
-     * @param {Object} ctx 实例上下文
+     * @param {Object} instance 实例上下文
      * @return {Function} 中间件
      */
-    function getDepMap(ctx) {
+    function getDepMap(instance) {
+        var map = instance.map;
 
-        return function (param, next) {
+        function findIdFromMap(id) {
+            for (var packName in map) {
+                if (map.hasOwnProperty(packName)) {
+                    if (map[packName].map[id]) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        return function (ctx, next) {
             var len = ctx.ids.length;
             var lackIds = [];
 
             for (var i = 0; i < len; i++) { // 继续深入分析依赖v
                 var id = ctx.ids[i];
-                if (!ctx.map[id]) {
+                if (!findIdFromMap(id)) {
                     lackIds.push(id);
                 }
             }
-
             loadLackedIdMap(ctx, lackIds, function (res) {
                 next(res);
             });
         };
     }
 
+    function findId(id, packName, map) {
+        var sections = id.split('/');
+        var modInfo;
+        if (packName) {
+            var packInfo = map[packName];
+            modInfo = packInfo.map[id];
+            if (modInfo) {
+                return {
+                    modInfo: modInfo,
+                    packName: packName
+                };
+            }
+        }
+
+        var idPackName = sections[0]; // 从Id解析出该id的包名，取到该报名
+        var idPackInfo = map[idPackName]; // 从
+        if (!idPackInfo) { // id包的包映射都没有
+            return {
+                modInfo: modInfo,
+                packName: packName || idPackName  // 还是返回原来的pack，而不是id的pack
+            };
+        }
+
+        modInfo = idPackInfo.map[id];
+        if (modInfo) { // id包里有，就返回
+            return {
+                modInfo: modInfo,
+                packName: idPackName
+            };
+        }
+        console.warn('lack module info', id, packName);
+        // 最终就是没找到
+        return {
+            modInfo: modInfo,
+            packName: packName || idPackName // 还是返回原来的pack，而不是id的pack
+        };
+    }
+
+    function existId(id, outModDeps) {
+        for (var i = 0; i < outModDeps.length; i++) {
+            if (outModDeps[i].id === id) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /**
      * 递归分析依赖
      *
      * @param {string} id 模块id
+     * @param {Object} packName 依赖映射关系
      * @param {Object} map 依赖映射关系
+     * @param {Object} outModDeps 依赖映射关系
      * @return {Function} 中间件
      */
-    function analyze(id, map) {
-        var dep = [];
-        var info = map[id];
-        var deps = info.d || []; // d代表直接依赖，用简写减少输出到html代码量
-        var len = deps.length;
-
+    function analyze(id, packName, map, outModDeps) {
+        var res = findId(id, packName, map);
+        packName = res.packName;
+        var modInfo = res.modInfo || {};
+        var depMods = [];
+        var modDeps = modInfo.d || []; // d代表直接依赖，用简写减少输出到html
+        var len = modDeps.length;
         for (var i = 0; i < len; i++) { // 继续深入分析依赖
-            var nextid = deps[i];
-            if (map[nextid]) { // 从map里找到模块依赖
-                var d = analyze(deps[i], map);
-                dep.push.apply(dep, d);
+            var nextid = modDeps[i];
+            if (!existId(nextid, outModDeps)) { // 从map里找到模块依赖
+                var mods = analyze(nextid, packName, map, outModDeps);
+                depMods.push.apply(depMods, mods);
             }
         }
-
-        dep.push(id);
-        return dep;
+        modInfo.id = id;
+        depMods.push(modInfo);
+        return depMods;
     }
 
     /**
      * 中间件包裹-分析模块的所有依赖模块
      *
-     * @param {Object} ctx 实例上下文
+     * @param {Object} instance 实例上下文
      * @return {Function} 中间件
      */
-    function analyzeDep(ctx) {
-        ctx.deps = [];
+    function analyzeDep(instance) {
+        instance.lackDeps = [];
+        return function (ctx, next) {
 
-        return function (param, next) {
-            var dep = [];
-            var map = ctx.map;
-            var len = ctx.ids.length;
+            var outModDeps = [];
+            var map = instance.map;
+            var ids = ctx.ids;
+            var len = ids.length;
             for (var i = 0; i < len; i++) { // 继续深入分析依赖
-                var id = ctx.ids[i];
-                if (map[id]) { // 从map里找到模块依赖
-                    var d = analyze(id, map);
-                    dep.push.apply(dep, d);
+                var id = ids[i];
+                if (!existId(id, outModDeps)) { // 从map里找到模块依赖
+                    var d = analyze(id, null, map, outModDeps);
+                    outModDeps.push.apply(outModDeps, d);
                 }
-                else {
-                    dep.push(id); // 没有依赖关系还是要去尝试加载的
-                }
+                // else {
+                //     instance.lackDeps.push(id);
+                //     console.warn('lack id', id);
+                //     outModDeps.push(id); // 没有依赖关系还是要去尝试加载的
+                // }
             }
-            ctx.deps = dep;
+            ctx.deps = outModDeps;
             next();
         };
     }
 
     // 怕不同id，指向同一个文件，所以做了层unique，相同path只combo加载一次
     var pathCache = {};
+
+
+    var headElement = document.getElementsByTagName('head')[0];
+    var baseElement = document.getElementsByTagName('base')[0];
+    if (baseElement) {
+        headElement = baseElement.parentNode;
+    }
+    var loadingURLs = {};
+
+    function createScript(src, onload) {
+        if (loadingURLs[src]) {
+            return;
+        }
+
+        loadingURLs[src] = 1;
+
+        // 创建script标签
+        //
+        // 这里不挂接onerror的错误处理
+        // 因为高级浏览器在devtool的console面板会报错
+        // 再throw一个Error多此一举了
+        var script = document.createElement('script');
+        script.setAttribute('data-src', src);
+        script.src = src;
+        script.async = true;
+        if (script.readyState) {
+            script.onreadystatechange = innerOnload;
+        }
+        else {
+            script.onload = innerOnload;
+        }
+
+        function innerOnload() {
+            var readyState = script.readyState;
+            if (
+                typeof readyState === 'undefined'
+                || /^(loaded|complete)$/.test(readyState)
+            ) {
+                script.onload = script.onreadystatechange = null;
+                script = null;
+
+                onload();
+            }
+        }
+        // currentlyAddingScript = script;
+
+        // If BASE tag is in play, using appendChild is a problem for IE6.
+        // See: http://dev.jquery.com/ticket/2709
+        baseElement
+            ? headElement.insertBefore(script, baseElement)
+            : headElement.appendChild(script);
+    }
+
+    function getNowFormatDate() {
+        var date = new Date();
+        var seperator1 = '';
+        var seperator2 = '';
+        var month = date.getMonth() + 1;
+        var strDate = date.getDate();
+        if (month >= 1 && month <= 9) {
+            month = '0' + month;
+        }
+        if (strDate >= 0 && strDate <= 9) {
+            strDate = '0' + strDate;
+        }
+        var currentdate = date.getFullYear() + seperator1 + month + seperator1 + strDate
+                + '' + date.getHours() + seperator2 + date.getMinutes();
+                // + seperator2 + date.getSeconds();
+        return currentdate;
+    }
+
+    /**
+     * 兜底加载，通过id去加载，不缓存
+     *
+     * @param {Object} ctx loader实例
+     * @param {string} id url的search
+     */
+    function loadUrlByid(ctx, id) {
+        var url = ctx.instance.byidUrl + id + ',' + getNowFormatDate();
+
+        createScript(url, function () {
+            ctx.modAutoDefine();
+        });
+        // var eslContext = ctx.eslContext;
+        // var len = ids.length;
+        // for (var i = 0; i < len; i++) {
+        //     var id = ids[i];
+        //     if (!(eslContext.loadingModules[id] || eslContext.modModules[id])) {
+        //         eslContext.loadModule(id, url);
+        //     }
+        // }
+    }
 
     /**
      * 必须调用esl的 loadModule 加载模块， 否则esl无法保证得知id的加载状态，会导致超时
@@ -269,36 +417,52 @@
      * @param {Array} ids 所有模块
      */
     function loadUrl(ctx, search, ids) {
-        var url = ctx.opt.comboUrl + search;
-        var eslContext = ctx.eslContext;
-        var len = ids.length;
-        for (var i = 0; i < len; i++) {
-            var id = ids[i];
-            if (!(eslContext.loadingModules[id] || eslContext.modModules[id])) {
-                eslContext.loadModule(id, url);
-            }
-        }
+        var url = ctx.instance.comboUrl + search;
+
+        createScript(url, function () {
+            ctx.modAutoDefine();
+        });
+        // var eslContext = ctx.eslContext;
+        // var len = ids.length;
+        // for (var i = 0; i < len; i++) {
+        //     var id = ids[i];
+        //     if (!(eslContext.loadingModules[id] || eslContext.modModules[id])) {
+        //         eslContext.loadModule(id, url);
+        //     }
+        // }
     }
 
     /**
      * 加载所有模块，优化：当要combo加载的模块过多，那么url可能长，过长容易导致url加载失败，因此做截断处理，分段加载
      *
      * @param {Object} ctx loader实例
-     * @param {Array} ids 所有模块
+     * @param {Array} modInfos 所有模块
      */
-    function load(ctx, ids) {
-        var len = ids.length;
-        var map = ctx.map;
+    function load(ctx, modInfos) {
+        var len = modInfos.length;
         var search = ''; // url的search部分
-        var searchLimit = limitUrlLen - ctx.opt.comboUrl.length; // 去除
+        var searchLimit = limitUrlLen - ctx.instance.comboUrl.length; // 去除
         var curIds = [];
         var comma = ','; // encodeURIComponent(',');
-
         for (var i = 0; i < len; i++) {
-            var id = ids[i]; // encodeURIComponent(ids[i]);
+            var modInfo = modInfos[i]; // encodeURIComponent(ids[i]);
+            var id = modInfo.id;
             var gap = search ? comma : '';
-            var idInfo = map[id] || {};
-            var path = idInfo.p || (id + '.js');
+            if (!modInfo.p) { // 模块路径不存在，就是模块信息为空, 走id路径加载
+                loadUrlByid(ctx, id, curIds);
+                pathCache[id] = 1;
+
+                ctx.instance.disableLoadDeps = true; // 不再动态请求deps，因为缺乏依赖，可能nodejs挂了，再请求也没用
+
+                if (curIds.length) { // 如果还有一些id没有加载，那么先去加载
+                    loadUrl(ctx, search, curIds); // 加载当前url
+                    search = ''; // 清空query
+                    curIds = []; // 清空已经开始加载的id
+                }
+                continue;
+            }
+
+            var path = modInfo.p;
             var nextsearch = search;
             // 怕不同id，指向同一个文件，所以做了层unique，相同path只combo加载一次
             if (pathCache[path]) {
@@ -309,8 +473,7 @@
             pathCache[path] = 1;
             if (nextsearch.length > searchLimit) {
                 loadUrl(ctx, search, curIds); // 加载当前url
-                search = ''; // 清空query
-                search += id;
+                search = path; // 清空query
                 curIds = []; // 清空已经开始加载的id
                 curIds.push(id);
             }
@@ -330,37 +493,36 @@
      * 中间件包裹-以combo服务加载所有依赖模块
      * 说明： 中间件返回一个函数，而不是直接函数，目的是use中间件时，可以做一些初始化工作，以下没有这些工作
      *
-     * @param {Object} ctx 实例上下文
+     * @param {Object} instance 实例上下文
      * @return {Function} 中间件
      */
-    function combo(ctx) {
+    function combo(instance) {
 
-        return function (param, next) {
+        return function (ctx, next) {
             var deps = ctx.deps;
             var len = deps.length;
-            var ids = [];
+            var modInfos = [];
             for (var i = 0; i < len; i++) {
-                var id = deps[i];
-
+                var modInfo = deps[i];
+                var id = modInfo.id;
                 // 已经加载过了 或者 esl已经负责加载的
-                if (ctx.cache[id] || ctx.eslContext.getModuleState(id) !== require.ModuleState.NOT_FOUND) {
+                if (instance.cache[id] || ctx.eslContext.getModuleState(id) !== require.ModuleState.NOT_FOUND) {
                     continue;
                 }
-                ctx.cache[id] = 1; // loading;
+                instance.cache[id] = 1; // loading;
 
                 // 不要combo，就一个一个加载
-                if (!ctx.opt.combo) {
-                    load(ctx, [id]);
+                if (!instance.opt.combo) {
+                    load(ctx, [modInfo]);
                 }
                 else {
-                    ids.push(id);
+                    modInfos.push(modInfo);
                 }
             }
-
             // 需要combo的话
-            if (ctx.opt.combo) {
-                ids = unique(ids);
-                load(ctx, ids); // 加载模块，处理url过长情况，同时交给esl的去加载
+            if (instance.opt.combo) {
+                modInfos = unique(modInfos);
+                load(ctx, modInfos); // 加载模块，处理url过长情况，同时交给esl的去加载
             }
 
             next();
@@ -372,13 +534,13 @@
      *
      * @param {Array} fns 所有中间件
      * @param {number} index 当前调用第几个中间件
-     * @param {Object} args 参数
+     * @param {Object} context 参数
      * @param {Function} callback 链式调用完成后的回调
      * @return {Mixed} 返回值
      */
-    function chains(fns, index, args, callback) {
-        args = args || [];
-        var context = this;
+    function chains(fns, index, context, callback) {
+        context = context || [];
+        var instance = this;
 
         // status: 空，{status: 0} 代表 正常，继续
         // status: false 或者 {status: 1} 代表正常，停止
@@ -398,15 +560,15 @@
 
             // 还有中间件要执行, 且 本次中间件没要求退出链式调用
             if (index < fns.length - 1 && !ret.status) {
-                args.pop();
-                chains.call(context, fns, ++index, args, callback);
+                context.pop();
+                chains.call(instance, fns, ++index, context, callback);
             }
             else {
                 callback(ret);
             }
         };
-        args.push(next);
-        var ret = fns[index].apply(context, args);
+        context.push(next);
+        var ret = fns[index].apply(instance, context);
         // 如果没有返回false，那么就主动执行下一个回调
         if (ret) {
             next();
@@ -427,6 +589,7 @@
         this.init(opt);
         this.cache = {};
         this.middlewares = [];
+        this.tmpCacheIds = [];
     }
 
     /**
@@ -437,6 +600,8 @@
     JetLoader.prototype.init = function (opt) {
         opt = opt || {};
         this.opt = extend(defaultOpt, opt);
+        this.comboUrl = this.opt.comboHost + this.opt.comboPath;
+        this.byidUrl = this.opt.comboHost + this.opt.byidPath;
         this.map = this.opt.map;
     };
 
@@ -447,7 +612,6 @@
     JetLoader.prototype.run = function () {
         this.registerLoader();
 
-        this.use(collectModIds(this));
         if (this.opt.loadDep) {
             this.use(getDepMap(this));
         }
@@ -460,8 +624,12 @@
      */
     JetLoader.prototype.registerLoader = function () {
         var me = this;
-        require.addLoader(function (context, callback) {
-            return me.requireLoad(context, callback);
+        require.addLoader(function (context, modAutoDefine) {
+            // debug为true，走esl流程，方便本地开发测试
+            if (me.opt.debug) {
+                return true;
+            }
+            return me.requireLoad(context, modAutoDefine);
         });
     };
 
@@ -477,21 +645,36 @@
     /**
      * esl要加载模块的回调，通知我们
      *
-     * @param {Object} context 参数，包含 要加载的id
-     * @param {Function} callback 链式调用完成后的回调
+     * @param {Object} eslContext 参数，包含 要加载的id
+     * @param {Function} modAutoDefine 链式调用完成后的回调
      * @return {Mixed} 返回值
      */
-    JetLoader.prototype.requireLoad = function (context, callback) {
-        // 以数组传递，方便后续可以应用apply函数
-        var args = [{
-            id: context.id // 当前只有一个id，后续可能会增加参数，那么每个中间件都有参数param = {id: };
-        }];
-        // 保存起来，后续会用到来调用esl的loadModule来加载模块
-        this.eslContext = context;
-        var ret = chains.call(this, this.middlewares, 0, args, function (ret) {
-            callback(); // 告诉esl完成加载
-        });
-        return ret;
+    JetLoader.prototype.requireLoad = function (eslContext, modAutoDefine) {
+        var me = this;
+        var tmpCacheIds = me.tmpCacheIds;
+
+        // 缓冲区里没有模块id，那么就等待2ms后去加载模块id，同时2ms以内新增的id也一并一起执行
+        if (!tmpCacheIds.length) {
+            setTimeout(function () {
+                if (me.tmpCacheIds.length) {
+                    // 以数组传递，方便后续可以应用apply函数
+                    var context = [{
+                        instance: me,
+                        eslContext: eslContext, // 保存起来，后续会用到来调用esl的loadModule来加载模块
+                        modAutoDefine: modAutoDefine,
+                        ids: me.tmpCacheIds // 将缓冲区所有模块压入主变量，开始加载这些模块模块
+                    }];
+
+                    me.tmpCacheIds = []; // 清空缓冲区，继续下一个tick的加载
+                    chains.call(me, me.middlewares, 0, context, function (ret) {
+                        modAutoDefine(); // 告诉esl完成加载
+                    });
+                }
+            }, 2);
+        }
+
+        tmpCacheIds.push(eslContext.id);
+        return false;
     };
 
     /**
@@ -502,6 +685,12 @@
     JetLoader.prototype.destroy = function () {
         this.cache = this.map = this.opt = this.middlewares = null;
     };
+
+    if (typeof define === 'function' && define.amd) {
+        define(function () {
+            return JetLoader;
+        });
+    }
 
     // todo: 暂时先暴露全局变量
     global.JetLoader = JetLoader;

@@ -7,7 +7,7 @@ fis.match('**', {
 });
 
 fis.match('src/(*.js)', {
-    optimizer: fis.plugin('uglify-js'),
+    // optimizer: fis.plugin('uglify-js'),
     // useHash: true,
     release: '$1'
 });
