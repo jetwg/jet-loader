@@ -23,7 +23,7 @@
     var defaultOpt = {
         comboHost: '//jet.bdstatic.com', // combo url, cdn
         comboPath: '/bypath??', // combo url, cdn
-        byidPath: '/byid??', // combo url, cdn
+        nginxComboPath: '/combo/jetdist??', // 普通nginx combo，用来做兜底
         depUrl: '//jet.baidu.com/dep?ids=', // 动态获取依赖配置的url
         map: {}, // 当前依赖配置
         combo: true, // 开启combo服务，默认true
@@ -394,7 +394,7 @@
      * @param {string} id url的search
      */
     function loadUrlByid(ctx, id) {
-        var url = ctx.instance.byidUrl + id + ',' + getNowFormatDate();
+        var url = ctx.instance.nginxComboUrl + id + '.js,' + getNowFormatDate();
 
         createScript(url, function () {
             ctx.modAutoDefine();
@@ -601,7 +601,7 @@
         opt = opt || {};
         this.opt = extend(defaultOpt, opt);
         this.comboUrl = this.opt.comboHost + this.opt.comboPath;
-        this.byidUrl = this.opt.comboHost + this.opt.byidPath;
+        this.nginxComboUrl = this.opt.comboHost + this.opt.nginxComboPath;
         this.map = this.opt.map;
     };
 
