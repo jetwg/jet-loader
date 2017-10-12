@@ -26,9 +26,8 @@
         nginxComboPath: '/combo/jetdist??', // 普通nginx combo，用来做兜底
         depUrl: '//jet.baidu.com/dep?ids=', // 动态获取依赖配置的url
         map: {}, // 当前依赖配置
-        combo: true, // 开启combo服务，默认true
         loadDep: true, // 没有依赖，就动态去加载依赖，默认true
-        debug: false // debug为true，走esl流程，方便本地开发测试
+        debug: false // debug为true，不做combo，bypath带上模块信息
     };
 
     // 市面上对url的限制不一，也跟服务器设置相关，目前ie底版本限制2048，综合给出一个大概数字，后续根据线上稳定性日志调整
@@ -61,16 +60,18 @@
      * 简单去重函数，去重模块，已模块id为唯一
      *
      * @param {Array} arr 待去重数组
+     * @param {boolean} isItemObj 数组项是对象，还是 其他, 对象的化，根据id去重
      * @return {Array} 新数组
      */
-    function unique(arr) {
+    function unique(arr, isItemObj) {
         var res = [];
         var map = {};
         var len = arr.length;
         for (var i = 0; i < len; i++) {
-            if (!map[arr[i].id]) {
+            let key = isItemObj ? arr[i].id : arr[i];
+            if (!map[key]) {
                 res.push(arr[i]);
-                map[arr[i].id] = 1;
+                map[key] = 1;
             }
         }
         return res;
@@ -147,6 +148,7 @@
         if (!lackIds.length || ctx.instance.disableLoadDeps) {
             return callback(true);
         }
+        lackIds = unique(lackIds);
         var instance = ctx.instance;
         var url = instance.opt.depUrl + encodeURIComponent(lackIds.join(','));
         ajax(ctx, {
@@ -417,6 +419,12 @@
      * @param {Array} ids 所有模块
      */
     function loadUrl(ctx, search, ids) {
+
+        if (ctx.instance.opt.debug) {
+            var idStr = '_db_' + ids.join('|');
+            search = idStr + ',' + search;
+        }
+
         var url = ctx.instance.comboUrl + search;
 
         createScript(url, function () {
@@ -512,16 +520,16 @@
                 instance.cache[id] = 1; // loading;
 
                 // 不要combo，就一个一个加载
-                if (!instance.opt.combo) {
+                if (instance.opt.debug) {
                     load(ctx, [modInfo]);
                 }
                 else {
                     modInfos.push(modInfo);
                 }
             }
-            // 需要combo的话
-            if (instance.opt.combo) {
-                modInfos = unique(modInfos);
+            // 需要debug的话
+            if (!instance.opt.debug) {
+                modInfos = unique(modInfos, true); // 对象数组去重，根据id
                 load(ctx, modInfos); // 加载模块，处理url过长情况，同时交给esl的去加载
             }
 
@@ -625,10 +633,6 @@
     JetLoader.prototype.registerLoader = function () {
         var me = this;
         require.addLoader(function (context, modAutoDefine) {
-            // debug为true，走esl流程，方便本地开发测试
-            if (me.opt.debug) {
-                return true;
-            }
             return me.requireLoad(context, modAutoDefine);
         });
     };
