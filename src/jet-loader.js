@@ -68,7 +68,7 @@
         var map = {};
         var len = arr.length;
         for (var i = 0; i < len; i++) {
-            let key = isItemObj ? arr[i].id : arr[i];
+            var key = isItemObj ? arr[i].id : arr[i];
             if (!map[key]) {
                 res.push(arr[i]);
                 map[key] = 1;
