@@ -21,7 +21,7 @@
      * @type {Object}
      */
     var defaultOpt = {
-        comboHost: '//jet.bdstatic.com', // combo url, cdn
+        comboHost: location.protocol === 'https:' ? 'https://ss3.bdstatic.com/7r1SsjikBxIFlNKl8IuM_a' : 'http://jet.bdstatic.com', // combo url, cdn
         comboPath: '/bypath??', // combo url, cdn
         nginxComboPath: '/combo/jetdist??', // 普通nginx combo，用来做兜底
         depUrl: '//jet.baidu.com/dep?ids=', // 动态获取依赖配置的url
