@@ -710,7 +710,6 @@
 
     var singleton = null;
     JetLoader.start = function (conf) {
-        console.log('addmap', conf.map)
         if (!singleton) {
             singleton = new JetLoader(conf);
             singleton.run();
