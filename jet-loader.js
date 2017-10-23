@@ -645,7 +645,7 @@
      * @param {Function} fn 中间件
      */
     JetLoader.prototype.addMap = function (newmap) {
-        let self = this;
+        var self = this;
         if (newmap.constructor.name !== 'Object') {
             return;
         }
