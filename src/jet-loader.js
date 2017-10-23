@@ -157,14 +157,7 @@
                 if (res.status) {
                     return callback(false);
                 }
-                each(res.data, function (packInfo, packName) {
-                    var curPackInfo = instance.map[packName];
-                    if (!curPackInfo) {
-                        curPackInfo = {map: {}};
-                    }
-                    curPackInfo.map = extend(curPackInfo.map, packInfo.map || {});
-                    instance.map[packName] = curPackInfo;
-                });
+                instance.addMap(res.data);
                 // 自己使用，不用判断callback是否存在
                 callback(true);
             },
@@ -647,6 +640,26 @@
     };
 
     /**
+     * 增加映射
+     *
+     * @param {Function} fn 中间件
+     */
+    JetLoader.prototype.addMap = function (newmap) {
+        let self = this;
+        if (newmap.constructor.name !== 'Object') {
+            return;
+        }
+        each(newmap, function (packInfo, packName) {
+            var curPackInfo = self.map[packName];
+            if (!curPackInfo) {
+                curPackInfo = {map: {}};
+            }
+            curPackInfo.map = extend(curPackInfo.map, packInfo.map || {});
+            self.map[packName] = curPackInfo;
+        });
+    };
+
+    /**
      * esl要加载模块的回调，通知我们
      *
      * @param {Object} eslContext 参数，包含 要加载的id
@@ -688,6 +701,31 @@
      */
     JetLoader.prototype.destroy = function () {
         this.cache = this.map = this.opt = this.middlewares = null;
+        this.requireLoad = function (context) {
+            return; // 不接管了， 接管需要  返回false
+            // return false; // 接管， 自己加载
+            // return id; // 更改模块id，不会走baseUrl了， 还是esl加载
+        };
+    };
+
+    var singleton = null;
+    JetLoader.start = function (conf) {
+        console.log('addmap', conf.map)
+        if (!singleton) {
+            singleton = new JetLoader(conf);
+            singleton.run();
+        }
+        else {
+            singleton.addMap(conf.map);
+        }
+
+        return singleton;
+    };
+    JetLoader.stop = function (conf) {
+        if (singleton) {
+            singleton.destroy();
+            singleton = null;
+        }
     };
 
     if (typeof define === 'function' && define.amd) {
