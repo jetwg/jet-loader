@@ -1,6 +1,6 @@
 {
   "name": "jet-loader",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "description": "jet loader",
   "main": "dist/jet-loader.js",
   "scripts": {
@@ -13,9 +13,7 @@
   ],
   "author": "kaivean@outlook.com",
   "license": "ISC",
-  "dependencies": {
-
-  },
+  "dependencies": {},
   "devDependencies": {
     "jasmine": "^2.7.0",
     "karma": "^1.7.0",
