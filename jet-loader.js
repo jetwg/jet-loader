@@ -21,13 +21,16 @@
      * @type {Object}
      */
     var defaultOpt = {
+        // 单文件加载，和esl加载一样了，不过少了esl的path映射
         comboHost: location.protocol === 'https:' ? 'https://ss3.bdstatic.com/7r1SsjikBxIFlNKl8IuM_a' : 'http://jet.bdstatic.com', // combo url, cdn
         comboPath: '/bypath??', // combo url, cdn
         nginxComboPath: '/combo/jetdist??', // 普通nginx combo，用来做兜底
         depUrl: '//jet.baidu.com/dep?ids=', // 动态获取依赖配置的url
+        whiteList: null,
         map: {}, // 当前依赖配置
         loadDep: true, // 没有依赖，就动态去加载依赖，默认true
-        debug: false // debug为true，不做combo，bypath带上模块信息
+        debug: false, // debug为true，不做combo，bypath带上模块信息,
+        beforeRequire: function (id, ctx) {return id;}
     };
 
     // 市面上对url的限制不一，也跟服务器设置相关，目前ie底版本限制2048，综合给出一个大概数字，后续根据线上稳定性日志调整
@@ -604,6 +607,8 @@
         this.comboUrl = this.opt.comboHost + this.opt.comboPath;
         this.nginxComboUrl = this.opt.comboHost + this.opt.nginxComboPath;
         this.map = this.opt.map;
+        this.whiteList = this.opt.whiteList;
+        this.beforeRequire = this.opt.beforeRequire;
     };
 
     /**
@@ -668,6 +673,12 @@
      */
     JetLoader.prototype.requireLoad = function (eslContext, modAutoDefine) {
         var me = this;
+
+        var handleId = this.beforeRequire(eslContext.id, this);
+        if (typeof handleId !== 'string' || !handleId) { // 不为字符串，或者  为空，都不接管
+            return; // 不接管
+        }
+
         var tmpCacheIds = me.tmpCacheIds;
 
         // 缓冲区里没有模块id，那么就等待2ms后去加载模块id，同时2ms以内新增的id也一并一起执行
@@ -690,7 +701,7 @@
             }, 2);
         }
 
-        tmpCacheIds.push(eslContext.id);
+        tmpCacheIds.push(handleId);
         return false;
     };
 
@@ -732,7 +743,8 @@
             return JetLoader;
         });
     }
-
-    // todo: 暂时先暴露全局变量
-    global.JetLoader = JetLoader;
+    if (!global.JetLoader) {
+        // todo: 暂时先暴露全局变量
+        global.JetLoader = JetLoader;
+    }
 })(this);
