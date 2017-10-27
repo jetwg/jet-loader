@@ -1,8 +1,8 @@
 {
   "name": "jet-loader",
-  "version": "1.0.11",
+  "version": "1.0.12",
   "description": "jet loader",
-  "main": "dist/jet-loader.js",
+  "main": "jet-loader.js",
   "scripts": {
     "build": "sh build.sh",
     "test": "karma start karma.conf.js"
