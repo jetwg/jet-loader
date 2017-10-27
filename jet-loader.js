@@ -22,10 +22,10 @@
      */
     var defaultOpt = {
         // 单文件加载，和esl加载一样了，不过少了esl的path映射
-        comboHost: location.protocol === 'https:' ? 'https://ss3.bdstatic.com/7r1SsjikBxIFlNKl8IuM_a' : 'http://jet.bdstatic.com', // combo url, cdn
+        comboHost: '//jet.bdstatic.com', // combo url, cdn
         comboPath: '/bypath??', // combo url, cdn
         nginxComboPath: '/combo/jetdist??', // 普通nginx combo，用来做兜底
-        depUrl: '//jet.baidu.com/dep?ids=', // 动态获取依赖配置的url
+        // depUrl: '//jet.baidu.com/dep?ids=', // 动态获取依赖配置的url
         whiteList: null,
         map: {}, // 当前依赖配置
         loadDep: true, // 没有依赖，就动态去加载依赖，默认true
