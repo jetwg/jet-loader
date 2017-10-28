@@ -1,6 +1,6 @@
 {
   "name": "jet-loader",
-  "version": "1.0.12",
+  "version": "1.0.13",
   "description": "jet loader",
   "main": "jet-loader.js",
   "scripts": {

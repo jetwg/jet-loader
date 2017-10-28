@@ -392,7 +392,7 @@
      * @param {string} id url的search
      */
     function loadUrlByid(ctx, id) {
-        var url = ctx.instance.nginxComboUrl + id + '.js,' + getNowFormatDate();
+        var url = ctx.instance.nginxComboUrl + id + '.js,' + '_ignore_' + getNowFormatDate();
 
         createScript(url, function () {
             ctx.modAutoDefine();
@@ -417,7 +417,7 @@
     function loadUrl(ctx, search, ids) {
 
         if (ctx.instance.opt.debug) {
-            var idStr = '_db_' + ids.join('|');
+            var idStr = '_ignore_' + ids.join('|');
             search = idStr + ',' + search;
         }
 
